@@ -41,7 +41,7 @@ $ func start
 
 Request:
 ```
-curl --location --request GET 'http://localhost:7071/api/ph_check' \
+curl --location --request POST 'http://localhost:7071/api/ph_check' \
 --header 'Content-Type: application/json' \
 --data-raw '{"number" : "03 9865 2800",
             "country" : "AU"}'
