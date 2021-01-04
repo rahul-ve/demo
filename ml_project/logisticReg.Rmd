@@ -1,0 +1,276 @@
+---
+title: "LogisticRegression4 - using cleanData3"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+clear the Environment
+
+```{r}
+rm(list=ls())
+```
+
+```{r, message=FALSE}
+library(pROC)
+library(huxtable)
+library(flextable)
+options(huxtable.print = print_notebook)
+```
+
+
+
+#### Read cleaned data
+```{r}
+cleanData <- read.csv("../testFiles/dat_clean3.csv")
+dim(cleanData)
+str(cleanData)
+```
+
+
+#### Seed
+```{r}
+set.seed(1)
+```
+
+### Structure:
+  - train the full-model using training data set
+  - use AIC/BIC to pick a model
+  - test the model using testing data set
+  - check the model using CV data set
+
+##### Split data into training (60% samples) ,  CV set (20%) and testing ( remaining 20% samples)
+```{r}
+N = nrow(cleanData)
+A = round(N*0.6)
+B = round(N*0.2)
+randomIndex  = sample(N)
+train = randomIndex[1:A]
+CV =  randomIndex[(A+1):(A+B)]
+test = randomIndex[(A+B+1):N]
+cbind(N, A, B, length(train), length(CV), length(test))
+```
+
+
+```{r}
+Y = cleanData$hypertension
+X = cleanData[,-c(1:3)]
+Y <-  as.factor(Y)
+str(Y)
+str(X)
+```
+
+## ****************** 
+FULL MODEL (USING ONLY 4507 SAMPLES)
+
+```{r}
+lr.model <- glm(Y~., data=X, family=binomial, subset=train)
+summary(lr.model)
+```
+
+
+
+
+
+what I observed consistantly is that adding more and more samples gives more significant variables!
+
+## ****************** 
+
+### model selection
+
+### Using Step() to select the model via AIC/BIC
+
+```{r, message=FALSE}
+null = glm(Y~1,data=X,family=binomial, subset=train)
+full = lr.model
+n = length(Y)
+# stepwise from full model using BIC
+res.step.bic.full <- step(full,k=log(n), trace = 0)
+# stepwise from full model using AIC
+res.step.aic.full <- step(full,k=2, trace = 0)
+# stepwise from null model using BIC
+res.step.bic.null <- step(null,scope=list(lower=null,upper=full), k=log(n), trace = 0)
+# stepwise from null model using AIC
+res.step.aic.null <- step(null,scope=list(lower=null,upper=full), k=2, trace = 0)
+```
+
+
+```{r}
+#summary(res.step.bic.full)
+```
+
+```{r}
+summary(res.step.aic.full)
+```
+```{r}
+#summary(res.step.aic.null)
+```
+```{r}
+#summary(res.step.bic.null)
+```
+
+```{r}
+broom::glance(res.step.bic.full)
+```
+
+```{r}
+contrasts(Y)
+```
+
+
+so, p in logit(p)  refers to yes (ie,  gives the probability of someone developing hypertension!)
+
+
+
+## ****************** 
+#####  Summary of results for Logistic regression
+
+```{r}
+
+ht = huxreg("Full" = full, "Full-BIC" = res.step.bic.full,  "Full-AIC" = res.step.aic.full, "Null-BIC" = res.step.bic.null, "Null-AIC" = res.step.aic.null,
+            statistics = c(N = "nobs", "logLik", "AIC", "BIC", "null.deviance", Deviance = "deviance"), error_pos = 'same', borders = TRUE, bold_signif = 0.05)
+right_padding(ht) <- 10
+left_padding(ht)  <- 10
+#bold(ht)[2,]    <- TRUE      # there is an issue after installing flextable!!!!
+bottom_border(ht)[1,] <- 1
+right_border(ht) <-  1
+ht <- set_background_color(ht,1,2:6, "coral")
+ht
+```
+
+
+##### Picking FULL-AIC model
+
+$\bf{ln(\frac{p(X)}{1 - p(X)}) = \beta_0 + \beta_1 waist + \beta_2 bmi  + \beta_3 age + \beta_4 alcohol.energy }$
+
+ satfat comes up in two models with a negative coefficient! 
+
+#### training error rate
+
+
+```{r}
+lr.predictAIC.train <- predict(res.step.aic.full, X[train,], type= "response")
+lr.predAIC.train = rep("no", length(Y[train]))
+lr.predAIC.train[lr.predictAIC.train > 0.5] = "yes"
+table(lr.predAIC.train, Y[train]) 
+```
+```{r}
+LRperf.train = c()
+LRperf.train[1] = mean(lr.predAIC.train == Y[train])       # success rate
+LRperf.train[2] = mean(lr.predAIC.train != Y[train])       # error rate
+LRperf.train
+```
+
+
+### testing with test data set
+
+#### FULL model
+```{r}
+lr.predict <- predict(lr.model, X[test,], type= "response")
+lr.pred = rep("no", length(Y[test]))
+lr.pred[lr.predict > 0.5] = "yes"
+table(lr.pred, Y[test]) 
+```
+
+```{r}
+LRperf = c()
+LRperf[1] = mean(lr.pred == Y[test])       # success rate
+LRperf[2] = mean(lr.pred != Y[test])       # error rate
+LRperf
+```
+###  test-set   error rate has inceresed from 14% to 22%  - using only 4500 vs 6000 samples
+
+
+
+####  testing using FULL-AIC model
+
+```{r}
+lr.predictAIC <- predict(res.step.aic.full, X[test,], type= "response")
+lr.predAIC = rep("no", length(Y[test]))
+lr.predAIC[lr.predictAIC > 0.5] = "yes"
+table(lr.predAIC, Y[test]) 
+```
+
+```{r}
+LRperfAIC = c()
+LRperfAIC[1] = mean(lr.predAIC == Y[test])       # success rate
+LRperfAIC[2] = mean(lr.predAIC != Y[test])       # error rate
+LRperfAIC
+```
+###  test-set   error rate same as using the Full model
+
+
+###  ROC   comparision
+```{r}
+ROC_logit <-  roc(as.numeric(as.factor(Y[test])), as.numeric(as.factor(lr.predict)))       # full model ROC curve
+plot(ROC_logit, col="orange")
+ROC_logitAIC <-  roc(as.numeric(as.factor(Y[test])), as.numeric(as.factor(lr.predictAIC)))       # AIC test ROC curve
+plot(ROC_logitAIC, col="green", add=T)
+ROC_logitAIC.train <-  roc(as.numeric(as.factor(Y[train])), as.numeric(as.factor(lr.predictAIC.train)))       # AIC train  ROC curve
+plot(ROC_logitAIC.train, col="blue", add=T)
+
+```
+
+#### looks like ROC improved for test dataset!!  
+FULL and AIC model ROC curves are almost identical
+
+
+### ROC ========================================
+
+
+##### ROC function
+```{r}
+library(ROCR)
+rocplot = function (pred, truth, ...){                     ## pred is the numerical scores/ fitted values of hte model, truth  is the actual Y values from the test set
+   predob = prediction (pred, truth )
+   perf = performance (predob, "tpr", "fpr")           ## this calculates the measure="tpr", x.measure="fpr"   for each cutoff
+                                                            ##  I think it is  just a ratio of tpr/fpr  -  need to check
+   plot(perf, ...)}              ## plots the ROC curve
+```
+
+NOTE: taken from ISL pg 365
+
+```{r}
+rocplot(as.numeric(as.factor(lr.predict)),as.numeric(as.factor(Y[test]), main="Test-set data"), col="green")
+```
+
+
+
+
+## Using CV approach
+
+All the CV code John gave us is in the below file
+Sourcing it allows us to use it. 
+No need to add it to this file!
+
+```{r, echo=FALSE, message=FALSE}
+source("../helpers/cvfunctions.r")
+```
+### cv-error  - this is to choose between models (logReg, LDA, QDA, ... )
+####  need to figure out why Y-structure needs to change
+
+cv.glm code uses all the 
+```{r}
+str(Y)
+V = 10
+Yn = as.numeric(Y)-1       #  for some reason this needs to be 0-1  binary variable.
+str(Yn)
+Xcv <- subset(X, select=c(bmi, waist, alcohol.energy, age))     # only keeping variables that are significant - ie, from FULL-AIC model      
+str(Xcv)
+res.glm.cv = cv.glm(Xcv[CV,],Yn[CV],V,seed=1)
+res.glm.cv
+```
+
+This is similar/slightly higher than test-set data.
+
+```{r}
+LRperfCV = c()
+LRperfCV[1] = 1 - res.glm.cv
+LRperfCV[2] = res.glm.cv
+cbind(LRperf, LRperf.train, LRperfAIC, LRperfCV)
+```
+

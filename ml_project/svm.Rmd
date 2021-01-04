@@ -1,0 +1,244 @@
+---
+title: "SVM-project1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r, message=FALSE}
+library(pROC)
+library(ROCR)
+library(huxtable)
+library(e1071)
+options(huxtable.print = print_notebook)
+```
+
+
+clear the Environment
+
+```{r}
+rm(list=ls())
+```
+
+
+
+#### Read cleaned data
+```{r}
+cleanData <- read.csv("./dat_clean3.csv")           # need to change this if running on your pc
+str(cleanData)
+```
+
+
+#### Seed
+```{r}
+set.seed(1)
+```
+
+
+
+###  Split data into training (60% samples) , and testing ( remaining 40% samples)
+```{r}
+N = nrow(cleanData)
+A = round(N*0.6)
+B = round(N*0.2)
+randomIndex  = sample(N)
+train = randomIndex[1:A]
+#CV =  randomIndex[(A+1):(A+B)]
+test = randomIndex[(A+1):N]
+#cbind(N, A, B, length(train), length(CV), length(test))
+cbind(N, A, B, length(train), length(test))
+```
+
+
+```{r}
+Y = cleanData$hypertension
+X = cleanData[,-c(1:3)]
+Y <-  as.factor(Y)
+str(Y)
+str(X)
+```
+
+```{r}
+Ytrain = Y[train]
+Xtrain = X[train,]
+dat = data.frame(Xtrain, Ytrain)
+str(dat)
+```
+
+
+```{r}
+Ytest = Y[test]
+Xtest = X[test,]
+datTest <- data.frame(Xtest, Ytest)     # both test and train need to have the same order of variables!  - need to check this!
+str(datTest)
+```
+
+#####   NOTE - the svm function scales the data internally, we dont need to.
+### SVM - linear kernel
+
+###### Tuning for C   - trying:  0.001, 0.01, 0.1, 1, 5, 10, 100
+
+```{r}
+tune.out=tune(svm, Ytrain~., data=dat, kernel ="linear", ranges = list(cost=c(0.001,0.01, 0.1, 1,5,10,100) ))
+```
+
+```{r}
+names(tune.out)
+summary(tune.out)
+```
+
+
+
+```{r}
+tune.out$method
+tune.out$best.parameters
+tune.out$nparcomb
+bestOne <-  tune.out$best.model
+summary(bestOne)
+```
+
+####  parameters selected as part of CV tuning
+
+    -    cost:  0.1 
+
+
+```{r}
+Clow  = 0.1
+svmlinearLow <-  svm(Ytrain~., data=dat, kernel="linear", cost=Clow)   # internally scales the data
+str(svmlinearLow$index)   # with samller C we should get a larger no. of SVs
+summary(svmlinearLow)
+```
+
+
+### predicting
+
+```{r}
+
+predObjectLin <- predict(bestOne, datTest, decision.values = TRUE)      ## from the help file  
+#head(predObjectLin)
+
+table(predict=predObjectLin, truth=datTest$Ytest)    # gives the confusion matrix
+```
+
+```{r}
+SVMperf = c()
+SVMperf[1] = mean(predObjectLin == Ytest)       # success rate
+SVMperf[2] = mean(predObjectLin != Ytest)       # error rate
+SVMperf
+```
+
+####  slightly better than other models at this stage
+
+
+
+
+
+
+##### data for ROC 
+
+
+```{r}
+predFittedLin <-  attributes(predObjectLin)$decision.values
+class(predFittedLin)     # this is a matrix!!!      it is same as predFitted
+str(predFittedLin)
+head(predFittedLin)
+
+predFittedLinNums <- as.numeric(predFittedLin)           ## this is what we want for ROC curve
+head(predFittedLinNums)                 ## this should be sane as  the internal numbers used to classify   ie,  == head(predFittedLin)
+summary(predFittedLinNums)        # up to third quartile they are negative, that means a lot of those are classifed as "no"
+
+```
+
+### SVM  - non-linear
+
+
+#### radial kernel
+
+
+##### selecting both gamma and C using CV  - this takes quite some time to run
+
+```{r}
+tune.outRad = tune(svm, Ytrain~., data=dat, kernel ="radial",  ranges = list(cost=c(0.1, 1, 10, 100, 1000), gamma=c(0.5,1,2,3,4) ))    # WARNING: this will hammer the CPU
+```
+
+```{r}
+summary(tune.outRad)
+```
+
+
+
+```{r}
+bestOneRad <-  tune.outRad$best.model
+summary(bestOneRad)
+```
+
+
+
+```{r}
+Crad  = 1           # picked based on the above CV tuning!
+g = 0.5                 # parameter of radial SVM
+svmRad <-  svm(Ytrain~., data=dat, kernel="radial", cost=Crad, gamma=g)      # training the model with a radial kernel
+```
+
+
+```{r}
+str(svmRad$index)
+summary(svmRad)
+```
+
+
+### predicting  with radial SVM
+
+```{r}
+YpredictRad <-  predict(bestOneRad, datTest, decision.values = TRUE)
+table(predict=YpredictRad, truth=datTest$Ytest)    # gives the confusion matrix  for radial SVM
+```
+
+```{r}
+SVMperfRad = c()
+SVMperfRad[1] = mean(YpredictRad == Ytest)       # success rate
+SVMperfRad[2] = mean(YpredictRad != Ytest)       # error rate
+SVMperfRad
+```
+
+
+##### data for ROC curve
+
+```{r}
+predFittedRad <-  attributes(YpredictRad)$decision.values
+predFittedRadNums <- as.numeric(predFittedRad) 
+```
+
+
+
+
+### ROC ========================================
+
+
+##### ROC function
+```{r}
+rocplot = function (pred, truth, ...){                     ## pred is the numerical scores/ fitted values of hte model, truth  is the actual Y values from the test set
+   predob = prediction (pred, truth )
+   perf = performance (predob, "tpr", "fpr")           ## this calculates the measure="tpr", x.measure="fpr"   for each cutoff
+                                                            ##  I think it is  just a ratio of tpr/fpr  -  need to check
+   plot(perf, ...)}              ## plots the ROC curve
+```
+
+NOTE: taken from ISL pg 365
+
+
+
+#### ROC plot
+
+```{r}
+rocplot(predFittedLinNums, datTest$Ytest, main="Test-set data", col="green")
+rocplot(predFittedRadNums, datTest$Ytest, col="red", add=TRUE)
+legend("bottomright", legend=c("Linear", "Radial"), col= c("green", "red"), lty = 1, title = "Linear vs Radial kernel", inset = .02)
+```
+
+
+
+

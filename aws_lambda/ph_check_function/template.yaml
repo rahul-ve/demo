@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ph_check_function
+
+  Sample SAM Template for ph_check_function
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  CheckPhoneNoFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: ph_check/
+      Handler: app.lambda_handler
+      Runtime: python3.8
+      Events:
+        CheckPhoneNo:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /ph_check
+            Method: post
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  CheckPhoneNoApi:
+    Description: "API Gateway endpoint URL for Prod stage for Check Phone No function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/ph_check/"
+  CheckPhoneNoFunction:
+    Description: "Check Phone No Lambda Function ARN"
+    Value: !GetAtt CheckPhoneNoFunction.Arn
+  CheckPhoneNoFunctionIamRole:
+    Description: "Implicit IAM Role created for Check Phone No function"
+    Value: !GetAtt CheckPhoneNoFunctionRole.Arn

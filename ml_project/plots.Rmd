@@ -1,0 +1,175 @@
+---
+title: "plots"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(grid)
+```
+
+
+clear the Environment
+
+```{r}
+rm(list=ls())
+```
+
+
+```{r}
+#taken from https://stackoverflow.com/questions/13649473/add-a-common-legend-for-combined-ggplots/28594060#28594060
+grid_arrange_shared_legend <- function(...) {
+    plots <- list(...)
+    g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
+    legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
+    lheight <- sum(legend$height)
+    grid.arrange(
+        do.call(arrangeGrob, lapply(plots, function(x)
+            x + theme(legend.position="none"))),
+        legend,
+        ncol = 1,
+        heights = unit.c(unit(1, "npc") - lheight, lheight))
+}
+
+```
+
+
+
+#### Read cleaned data
+```{r}
+cleanData <- read.csv("../testFiles/dat_clean3.csv")
+#str(cleanData)
+```
+
+##### Split data into training (60% samples) ,  CV set (20%) and testing ( remaining 20% samples)
+```{r}
+N = nrow(cleanData)
+A = round(N*0.6)
+B = round(N*0.2)
+randomIndex  = sample(N)
+train = randomIndex[1:A]
+CV =  randomIndex[(A+1):(A+B)]
+test = randomIndex[(A+B+1):N]
+#cbind(N, A, B, length(train), length(CV), length(test))
+```
+
+
+```{r}
+Y = cleanData$hypertension
+X = cleanData[,-c(1:3)]
+Y <-  as.factor(Y)
+#str(Y)
+#str(X)
+```
+```{r}
+attach(cleanData)
+```
+
+
+
+```{r}
+SystolicBP <- factor((systolic > 140), levels=c("TRUE", "FALSE"), labels=c("High", "Normal"))
+
+#str(SystolicBP)
+gbmiSBP <- ggplot(cleanData, aes(x = bmi, y = systolic)) + geom_point(aes(color=SystolicBP))  + geom_smooth(method="lm") 
+gageSBP <- ggplot(cleanData, aes(x = age, y = systolic)) + geom_point(aes(color=SystolicBP))  + geom_smooth(method="lm") 
+gwaistSBP <- ggplot(cleanData, aes(x = waist, y = systolic)) + geom_point(aes(color=SystolicBP))  + geom_smooth(method="lm") 
+galcoSBP <- ggplot(cleanData, aes(x = alcohol.energy, y = systolic)) + geom_point(aes(color=SystolicBP))  + geom_smooth(method="lm")
+
+#grid.arrange(gbmiSBP, gageSBP, gwaistSBP, galcoSBP, ncol=2, nrow =2)
+```
+
+
+
+
+```{r}
+grid_arrange_shared_legend(gbmiSBP, gageSBP, gwaistSBP, galcoSBP, ncol=2, nrow =2)
+```
+
+```{r}
+DiastolicBP <- factor((diastolic >= 90), levels=c("TRUE", "FALSE"), labels=c("High", "Normal"))
+
+str(DiastolicBP)
+gbmiDBP <- ggplot(cleanData, aes(x = bmi, y = diastolic)) + geom_point(aes(color=DiastolicBP))  + geom_smooth(method="lm") 
+gageDBP <- ggplot(cleanData, aes(x = age, y = diastolic)) + geom_point(aes(color=DiastolicBP))  + geom_smooth(method="lm") 
+gwaistDBP <- ggplot(cleanData, aes(x = waist, y = diastolic)) + geom_point(aes(color=DiastolicBP))  + geom_smooth(method="lm") 
+galcoDBP <- ggplot(cleanData, aes(x = alcohol.energy, y = diastolic)) + geom_point(aes(color=DiastolicBP))  + geom_smooth(method="lm")
+
+#grid.arrange(gbmiSBP, gageSBP, gwaistSBP, galcoSBP, ncol=2, nrow =2)
+grid_arrange_shared_legend(gbmiDBP, gageDBP, gwaistDBP, galcoDBP, ncol=2, nrow =2)
+```
+```{r}
+# to extract the legend from one of the ggplots
+g_legend<-function(a.gplot){
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)}
+```
+
+### table
+test if difference in boxplots is significant
+```{r}
+names = c("alcohol.energy","bmi","salt","exercise","age","vit.b6","vit.c","vit.e","waist","satfat.energy","satfat","fat.energy","potassium")
+pvals = c(wilcox.test(alcohol.energy[hypertension == "no"],alcohol.energy[hypertension == "yes"])$p.value,
+          wilcox.test(bmi[hypertension == "no"],bmi[hypertension == "yes"])$p.value,
+          wilcox.test(salt[hypertension == "no"],salt[hypertension == "yes"])$p.value,
+          wilcox.test(exercise[hypertension == "no"],exercise[hypertension == "yes"])$p.value,
+          wilcox.test(age[hypertension == "no"],age[hypertension == "yes"])$p.value,
+          wilcox.test(vit.b6[hypertension == "no"],vit.b6[hypertension == "yes"])$p.value,
+          wilcox.test(vit.c[hypertension == "no"],vit.c[hypertension == "yes"])$p.value,
+          wilcox.test(vit.e[hypertension == "no"],vit.e[hypertension == "yes"])$p.value,
+          wilcox.test(waist[hypertension == "no"],waist[hypertension == "yes"])$p.value,
+          wilcox.test(satfat.energy[hypertension == "no"],satfat.energy[hypertension == "yes"])$p.value,
+          wilcox.test(satfat[hypertension == "no"],satfat[hypertension == "yes"])$p.value,
+          wilcox.test(fat.energy[hypertension == "no"],fat.energy[hypertension == "yes"])$p.value,
+          wilcox.test(potassium[hypertension == "no"],potassium[hypertension == "yes"])$p.value)
+signif = pvals < 0.05/13
+signif[signif == T] = "Reject"
+signif[signif == F] = "Accept"
+tests = data.frame(names,pvals,signif)
+tests = as.table(t(tests))
+tests
+
+```
+
+```{r}
+# this code is getting the upper and lower quartiles, then we can use that to limit the plot length with out affecting the data (kind  of like zooming in)
+# a vector of length 5, containing the extreme of the lower whisker, the lower ‘hinge’, the median, the upper ‘hinge’ and the extreme of the upper whisker
+# by using the below limits we "zoom" in upto the whiskers
+saltLim <-  boxplot.stats(cleanData$salt)$stats[c(1,5)]
+alcoLim <-  boxplot.stats(cleanData$alcohol.energy)$stats[c(1,5)]
+alcoLim[1] = -3       # added this cushion as alcohol has a lot of 0 values
+bmiLim <-  boxplot.stats(cleanData$bmi)$stats[c(1,5)]
+waistLim <-  boxplot.stats(cleanData$waist)$stats[c(1,5)]
+ageLim <-  boxplot.stats(cleanData$age)$stats[c(1,5)]
+exerciseLim <-  boxplot.stats(cleanData$exercise)$stats[c(1,5)]
+viteLim <-  boxplot.stats(cleanData$vit.e)$stats[c(1,5)]
+satfatLim <-  boxplot.stats(cleanData$satfat)$stats[c(1,5)]
+vitb6Lim <-  boxplot.stats(cleanData$vit.b6)$stats[c(1,5)]
+
+
+gsalt <- ggplot(cleanData, aes(x = hypertension, y = salt, color=hypertension) ) + geom_boxplot(outlier.colour = "red") +
+  guides(fill=F)  + coord_cartesian(ylim=saltLim) + theme(axis.title.x=element_blank())
+galco <-   ggplot(cleanData, aes(x = hypertension, y = alcohol.energy, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=alcoLim) + theme(axis.title.x=element_blank())
+gbmi <- ggplot(cleanData, aes(x = hypertension, y = bmi, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=bmiLim) + theme(axis.title.x=element_blank())
+gwaist <- ggplot(cleanData, aes(x = hypertension, y = waist, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=waistLim) + theme(axis.title.x=element_blank())
+gage <- ggplot(cleanData, aes(x = hypertension, y = age, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=ageLim)  + theme(axis.title.x=element_blank())
+gexercise <- ggplot(cleanData, aes(x = hypertension, y = exercise, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=exerciseLim)  + theme(axis.title.x=element_blank())
+gvit.e <- ggplot(cleanData, aes(x = hypertension, y = vit.e, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=viteLim)  + theme(axis.title.x=element_blank())
+gvit.b6 <- ggplot(cleanData, aes(x = hypertension, y = vit.b6, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=vitb6Lim)  + theme(axis.title.x=element_blank())
+gsatfat <- ggplot(cleanData, aes(x = hypertension, y = satfat, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=satfatLim)  + theme(axis.title.x=element_blank())
+
+grid_arrange_shared_legend(gbmi, gage, gwaist, galco, gsalt,gexercise,gvit.e,gvit.b6, gsatfat, ncol=3, nrow =3)
+```
+
+

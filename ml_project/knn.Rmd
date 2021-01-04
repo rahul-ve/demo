@@ -1,0 +1,146 @@
+---
+title: "KNN"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+clear the Environment
+
+```{r}
+rm(list=ls())
+```
+
+# KNN analysis
+
+#### Libraries
+```{r}
+library(class)
+```
+
+
+
+#### Read cleaned data
+```{r}
+cleanData <- read.csv("../testFiles/dat_clean3.csv")
+str(cleanData)
+```
+
+#### Seed
+```{r}
+set.seed(1)
+```
+
+#### Splitting the sample in to train, test, CV as 60%, 40%
+
+Split data into training (60% samples) and testing ( remaining 40% samples)
+```{r}
+N = nrow(cleanData)
+A = round(N*0.6)
+B = round(N*0.2)
+randomIndex  = sample(N)
+train = randomIndex[1:A]
+CV =  randomIndex[(A+1):(A+B)]
+testMore = randomIndex[(A+1):N]
+test = randomIndex[(A+B+1):N]
+cbind(N, A, B, length(train), length(CV), length(test), length(testMore))
+
+```
+
+
+```{r}
+Y = cleanData$hypertension
+X = cleanData[,-c(1:3)]
+Y <-  as.factor(Y)
+str(Y)
+str(X)
+```
+
+
+#### Scale continuous variables
+
+```{r}
+X.scaled <- scale(X)
+class(X.scaled)
+str(X.scaled)
+head(X.scaled)
+```
+
+
+### CV -analysis  - to pick K using only  training data
+
+
+```{r, echo=FALSE, message=FALSE}
+source("../helpers/cvfunctions.r")
+```
+
+```{r}
+k.values = seq(1,49,by=2)
+V = 10
+R = 30
+# Loop through all values of k and calculate the cross-validation error
+# ie,  CV error for each k, and we pick the k with lowest test cv error
+cv.errorsKNN = c()
+cv.kMin = c()
+cvMin = c()
+kMin = c()
+cv.errors1 = c()
+for (r in 1:R ) {
+    for (i in 1:length(k.values)) {
+      cv.errorsKNN[i] = cv.knn(X.scaled[train,],Y[train],k=k.values[i],V)       
+              #   we are building up a vector of cv-errors for each K
+    }
+    if (r ==1) {
+      cv.errors1 = cv.errorsKNN
+      plot(k.values,cv.errorsKNN,type="l",xlab="value of k",ylab="cross-validation error",cex.lab=1.5,
+        main="CV errors for K-nearest neighbours",cex.main=2,col="red", ylim=c(0.2,0.38), lwd=4)
+    } else     lines(k.values,cv.errorsKNN)
+    
+    kMin[r] <- k.values[which.min(cv.errorsKNN)]
+    cvMin[r] <- min(cv.errorsKNN)
+    
+}
+lines(k.values,cv.errors1, col="red")
+```
+
+
+
+```{r}
+plot(kMin, cvMin, col=ifelse(cvMin==min(cvMin), "cyan", "brown"), pch=ifelse(cvMin==min(cvMin), 19, 22),  cex=ifelse(cvMin==min(cvMin), 2, 1), main="Highlighted point/s is the minimum CV-error")
+cstar = min(cvMin)
+kstar = kMin[which(cvMin == min(cvMin))]
+text(kstar, cstar, paste(kstar,round(cstar,4), sep=", "), pos=4, cex=0.7)
+```
+
+###   testing against test set
+
+```{r}
+K = 20    # picked based on CV-analysis,  the curves flatten out after 20
+knn.predict <- knn(X.scaled[train,], X.scaled[test,], Y[train], k=K)
+table(knn.predict, Y[test])
+
+```
+
+```{r}
+KNNperf = c()
+KNNperf[1] = mean(Y[test] == knn.predict)          # success rate
+KNNperf[2] = mean(Y[test] != knn.predict)            #error rate
+KNNperf
+```
+
+### using test+CV samples
+
+```{r}
+K = 20    
+knn.predict <- knn(X.scaled[train,], X.scaled[testMore,], Y[train], k=K)
+table(knn.predict, Y[testMore])
+```
+
+```{r}
+KNNperf1 = c()
+KNNperf1[1] = mean(Y[testMore] == knn.predict)          # success rate
+KNNperf1[2] = mean(Y[testMore] != knn.predict)            #error rate
+KNNperf1
+```

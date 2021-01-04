@@ -1,0 +1,981 @@
+---
+title: "Examining the Risk Factors Associated with Hypertension in the Australian population"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+```
+
+
+```{r, echo=FALSE}
+#clear the Environment
+rm(list=ls())
+```
+
+```{r, message=FALSE,warning=F, echo=FALSE}
+library(ROCR)
+library(huxtable)
+library(e1071)
+options(huxtable.print = print_notebook)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(grid)
+library(class)
+```
+
+
+
+```{r seed, echo=FALSE}
+set.seed(1)
+```
+
+```{r helpers, echo=FALSE, message=FALSE,warning=F}
+# all the helper functions are in this file, including John's code
+source("./helpers.r")
+```
+
+
+
+```{r "Read Original data"}
+# READ THE ORIGINAL DATA
+Dat.old = read.csv(file = "./npa2011.csv") 
+```
+
+```{r "Deleting columns"}
+#### only keeping the data we need
+predictors <- c("ALCPER1", "BMISC", "SODIUMT1", "EXLWTBC", "AGEC", "B6T1", "VITCT1", "VITET1", "PHDCMWBC","SATPER1","SATFATT1","FATPER1","POTAST1")
+
+response <- c("HYPBC","DIASTOL","SYSTOL")
+
+easyNames <-  c("hypertension","diastolic","systolic","alcohol.energy","bmi","salt","exercise","age",
+"vit.b6","vit.c","vit.e", "waist","satfat.energy","satfat","fat.energy","potassium")
+
+dat.dirty <- Dat.old[,c(response, predictors)]
+#cbind(c(response, predictors),easyNames)     ## check the names are are in order
+
+#change names to easy
+names(dat.dirty) = easyNames
+#  write out dirty data -  for checking
+#write.csv(dat.dirty, file="dat_dirty1.csv", row.names = FALSE)
+#summary(dat.dirty)
+```
+
+```{r "recoding response - hypertension as boolean"}
+#  only see counts for 1, 2,  3, and 5  codes
+#table(dat.dirty$hypertension)
+
+####  recoding the response variable to binary
+###    this is for dat_clean2.csv  (i.e.,  before we moved across ~1000 samples from level 5 to level 2)
+
+# Makes hypertension a boolean , true if they currently have hypertension
+dat.dirty$hypertension = dat.dirty$hypertension<2.5 
+```
+
+```{r "removing samples/rows"}
+dat.c2 = dat.dirty
+
+dat.c2 = dat.c2[-which(dat.c2$bmi == 99 | dat.c2$bmi ==0 |dat.c2$bmi == 98),]
+dat.c2 = dat.c2[-which(dat.c2$exercise >9000),]
+dat.c2 = dat.c2[-which(dat.c2$salt > 17000),]          # chosen this cutoff based on consensus 
+dat.c2 = dat.c2[-which.max(dat.c2$vit.c),]         # there is a single high value!
+dat.c2 = dat.c2[-which(dat.c2$diastolic == 0 | dat.c2$diastolic >997),]
+#  there are no issues with systolic
+
+# how many waists missing
+#sum(dat.c2$waist >900)
+
+dat.c2 = dat.c2[-which(dat.c2$waist >900),]
+#summary(dat.c2)
+#str(dat.c2)
+```
+```{r "writing out dat_clean2  - used for Alcohol analysis"}
+ #  this file is used for alcohol analysis
+write.csv(dat.c2, file="dat_clean2.csv", row.names = FALSE)
+```
+
+
+```{r "Reclassyfying some of the samples  - changes hypertension level counts"}
+dat.c3 = dat.c2
+before <- table(dat.c3$hypertension)
+
+###   moving some samples across from level 5 to 2
+dat.c3$hypertension[dat.c3$hypertension == 5 & (dat.c3$systolic >140 | dat.c3$diastolic>90)] = 2
+#summary(dat.c3)  # about 1000 changed from 5 to 2  - 964 exact
+after <- table(dat.c3$hypertension)
+
+#rbind(before, after)
+```
+
+```{r  "write dat_clean3  - used for classification"}
+write.csv(dat.c3, file="dat_clean3.csv", row.names = FALSE)
+```
+
+
+```{r "read dat_clean3  - uses reclassified Y"}
+#### Read cleaned data
+cleanData <- read.csv("./dat_clean3.csv")           # need to change this if running on your pc
+#str(cleanData)
+```
+
+
+
+
+```{r "split data into train/cv/test"}
+#Split data into training (60% samples) , and testing ( remaining 40% samples)
+N = nrow(cleanData)
+A = round(N*0.6)
+B = round(N*0.2)
+randomIndex  = sample(N)
+train = randomIndex[1:A]
+CV =  randomIndex[(A+1):(A+B)]
+testSVM = randomIndex[(A+1):N]
+testMore = testSVM
+testLR = randomIndex[(A+B+1):N]
+#cbind(N, A, B, length(train), length(CV), length(testSVM), length(testLR))
+
+```
+
+
+```{r "x and y"}
+Y = cleanData$hypertension
+X = cleanData[,-c(1:3)]
+Y <-  as.factor(Y)
+#str(Y)
+#str(X)
+```
+
+
+```{r "Scale continuous variables"}
+X.scaled <- scale(X)
+#class(X.scaled)
+#str(X.scaled)
+#head(X.scaled)
+```
+
+
+```{r "training set"}
+Ytrain = Y[train]
+Xtrain = X[train,]
+dat = data.frame(Xtrain, Ytrain)
+#str(dat)
+```
+
+
+```{r "svm test-set"}
+YtestSVM = Y[testSVM]
+XtestSVM = X[testSVM,]
+datTestSVM <- data.frame(XtestSVM, YtestSVM)     # both test and train need to have the same order of variables!  - need to check this!
+#str(datTestSVM)
+
+YtestLR = Y[testLR]
+XtestLR = X[testLR,]
+datTestLR <- data.frame(XtestLR, YtestLR)     # both test and train need to have the same order of variables!  - need to check this!
+#str(datTestLR)
+```
+
+# Executive summary
+Hypertension is a condition characterised by consistent high blood pressure readings, effecting ~4 million Australians. Shockingly, 50% of sufferers of severe hypertension die within 10 years from cardiovascular implication including heart disease, stroke or uraemia. However, in 90% of cases, the causes are elusive and since the disease is asymptomatic, is often left untreated.  It is therefore important to identify the risk factors that are associated with this disease. To study the risk factors of hypertension the data from the 2011-2013 Australian Health Survey will be utilised.  
+This paper will investigate the prevalence of known risk factors of hypertension and attempt to classify people as hypertensive using their age, diet and physical measurements.
+
+### Key questions
+The key questions addressed are: 
+
++	What variables (from a list of known factors compiled from papers) can we identify as being related to the occurrence hypertension?
++	Is there a relationship between salt intake and blood pressure in those who haven't been told they have hypertension?
++	What relationship does alcohol intake have on the incidence of hypertension/blood pressure?
++	Can we use a person’s characteristics (BMI, waist circumference, age…) to classify them as hypertensive or not?
+
+### Main findings
+The main findings of this report are:  
+
++ 9 of the 13 variables showed significant difference in hypertension groups
++ Salt was found to have no correlation with blood pressure
++ Alcohol in small amounts may decrease blood pressure but in general contributes to an increase
++ Logistic regression and SVM (linear kernel) perform quite well in classification with 76 % success rate
+
+### Shortcomings
+The major shortcomings of this analysis stemmed mainly from the data used. Firstly, about a quarter (~3000) of the observations were lost in the cleaning process due to missing values in certain variables, there is possible bias in that some characteristics of a person could be common in the non-responders. The response variable had most people classed as ‘never told has hypertensive disease’, this is not a clear response to whether the person doesn’t have the disease as they could but haven’t been diagnosed, the method used to remedy this was not guaranteed to work either. Another variable could have had issues that could not be addressed, a large portion of alcohol intake responses were zero, this did not seem like a true reflection of the populations habits so it is possible that non respondence was simply coded as zero. Lastly the classification problem was likely effected by the fact that people with hypertension have changed the habits that lead to the onset of the disease, as since being diagnosed they would be receiving treatment and dietary/exercise plans. This effect was possibly why exercise and most dietary factors were not significant in classification models.
+
+# Problem
+
+What continuous variables (from a list of known factors compiled from papers) can we identify as being related to the occurrence hypertension?
+
++ The data used had 132 variables, with continuous and categorical data types, including the persons state of hypertension diagnosis (do they have it now, never been diagnosed etc..) and systolic and diastolic blood pressure measurements. After narrowing down the variables to a set of those mentioned in previous studies and are continuous, we ask the question: which variables are different in those people that have and do not have hypertension? This can be answered though observing the distributions of measurements through boxplots for those with and without hypertension and performing a statistical test if there is a significant difference at the 0.05 significance level.
+
+Is there a relationship between salt intake and blood pressure in those who haven't been told they have hypertension?
+
++ Salt is one of the most commonly known factors for high blood pressure, it would be a fair statement to say that when asked what one should do to reduce their risk of hypertension or to cure it, they would reply “cut down on salt in your diet”. This question will aim to determine if salt intake really does have a significant impact on blood pressure. The boxplot of salt intake between those with and without hypertension will reveal some information into the problem, then the analysis will continue with determining if salt intake is correlated with blood pressure in individuals who have not been medically diagnosed with hypertension.
+
+What relationship does alcohol intake have on the incidence of hypertension/blood pressure?
+
++	Another factor said to be associated with high blood pressure is alcohol intake, but the relationship might not be so simple as a linear correlation. Some reports suggest that certain small amounts of alcohol intake on a regular basis can lead to lower blood pressure that those who abstain, and it is generally accepted that large intakes lead to high blood pressure. By analysing the incidence of hypertension in different classes of drinkers (non-drinkers,lower half and upper half of drinkers) and looking at how alcohol intake is correlated with amount of alcohol consumption.
+
+Can we use a person’s characteristics (BMI,waist circ., age…) to classify them as hypertensive or not?
+
++	Hypertension is not something a person can know if they have without going to a doctor or performing a blood pressure measurement, for this reason it is important to know what factors can make a person at risk of the disease. This motivates the question if a classifier can be made that uses a person’s physical measurements, diet and other factors to determine if that person is at risk of hypertension.  This problem becomes one of classification: can we classify someone as hypertensive using these factors to some degree of accuracy.
+
+# Data 
+
+
+The data used to answer the questions is from the 2011-2013 Australian Health Survey. This was a large scale survey in which around 12,000 people from all ages (>2yr) and places responded to a wide variety of questions. The questions include personal traits, dietary habits, physical measurements, incidence of hypertension and many more. To reduce the number of variables used in our analysis, research was conducted into all known factors that may be related to hypertension. From these, all that had continuous measurements were kept for analysis. 
+
+These factors were (with there code name used):
+
+- Percentage of daily energy intake from alcohol (%) 'alcohol.energy'
+- Body mass index (kg m-2) 'bmi'
+- Daily salt intake (mg) 'salt'
+- Weekly exercise total (min) 'exercise'
+- Age (yrs) 'age'
+- Daily intake of vitamin B6 (mg) 'vit.b6
+- Daily intake of vitamin C (mg) 'vit.c'
+- Daily intake of vitamin E (mg) 'vit.e'
+- Waist circumference (cm) 'waist'
+- Percentage of daily energy intake from saturated fat (%) 'satfat.energy'
+- Daily intake of saturated fat (g) 'satfat'
+- Percentage of daily energy from all fat (%) 'fat.energy'
+- Daily intake of potassium (ug) 'potassium'
+
+The hypertension was categorical with 4 categories:   1) Ever told has hypertensive disease, still current and long term 2) Ever told has hypertensive disease, still current but not long term 3) Ever told has hypertensive disease, not current 4) Never told has hypertensive disease. To simplify analysis, the hypertension variable was transformed into a factor with only 2 values ‘yes’ if they currently have hypertension and ‘no’ if they don’t. 
+The last category ‘never told has hypertensive disease’ was very interesting. It creates a problem in that we don’t know if some of these people have hypertension or not. We wish to classify people as having hypertension or not, yet we don’t have the true state of hypertension for these people. For this reason, the data used in classification was transformed so that those in category 4 with systolic blood pressure >140 mmHg and/or diastolic blood pressure >90 are not transformed as ‘no’ but instead ‘yes’. This is a bold attempt to reduce error in the classification problem.
+The cleaning of the data of the selected variables was a simple process of removing data points with missing responses or unrealistic values.
+
+# Analysis
+
+## Variables related to incidence of hypertension
+
+All the variables used have been known to have some relation to hypertension. To test if there is a difference in the typical values for these variables between the hypertensive people and normotensive (normal blood pressure) a Mann-Whitney U test was performed for each variable. The null hypothesis is that there is no significant difference in the distribution of the values for the variables between the hypertensive and normotensive groups, the alternate hypothesis is that the distributions are different. A significance level of 0.01 was used and a Bonferroni correction made, this was done to ensure the conclusions were accurate.
+
+
+```{r  "Man-w test"}
+attach(cleanData,warn.conflicts = F)
+names = c("alcohol.energy","bmi","salt","exercise","age","vit.b6","vit.c","vit.e","waist","satfat.energy","satfat","fat.energy","potassium")
+pvals = c(wilcox.test(alcohol.energy[hypertension == "no"],alcohol.energy[hypertension == "yes"])$p.value,
+          wilcox.test(bmi[hypertension == "no"],bmi[hypertension == "yes"])$p.value,
+          wilcox.test(salt[hypertension == "no"],salt[hypertension == "yes"])$p.value,
+          wilcox.test(exercise[hypertension == "no"],exercise[hypertension == "yes"])$p.value,
+          wilcox.test(age[hypertension == "no"],age[hypertension == "yes"])$p.value,
+          wilcox.test(vit.b6[hypertension == "no"],vit.b6[hypertension == "yes"])$p.value,
+          wilcox.test(vit.c[hypertension == "no"],vit.c[hypertension == "yes"])$p.value,
+          wilcox.test(vit.e[hypertension == "no"],vit.e[hypertension == "yes"])$p.value,
+          wilcox.test(waist[hypertension == "no"],waist[hypertension == "yes"])$p.value,
+          wilcox.test(satfat.energy[hypertension == "no"],satfat.energy[hypertension == "yes"])$p.value,
+          wilcox.test(satfat[hypertension == "no"],satfat[hypertension == "yes"])$p.value,
+          wilcox.test(fat.energy[hypertension == "no"],fat.energy[hypertension == "yes"])$p.value,
+          wilcox.test(potassium[hypertension == "no"],potassium[hypertension == "yes"])$p.value)
+signif = pvals < 0.05/13
+signif[signif == T] = "Reject"
+signif[signif == F] = "Accept"
+tests = data.frame(names,pvals,signif)
+tests = as.table(t(tests))
+detach(cleanData)
+```
+
+```{r}
+# take nfrom https://cran.r-project.org/web/packages/gridExtra/vignettes/tableGrob.html
+grid.newpage()
+tt3 <- ttheme_minimal(
+  core=list(bg_params = list(fill = blues9[1:4], col=NA),
+            fg_params=list(fontface=3)),
+  colhead=list(fg_params=list(col="navyblue", fontface=4L)),
+  rowhead=list(fg_params=list(col="orange", fontface=3L)))
+grid.table(t(tests), theme=tt3)
+```
+
+The test has identified 9 of the 13 variables that accept the alternative hypothesis that the distribution for the values of those variables is different between hypertensive and normotensive groups. To gain better insight to the differences the boxplots of these variables for each group are plotted below.
+
+```{r "Boxplots of cleaned data"}
+# this code is getting the upper and lower quartiles, then we can use that to limit the plot length with out affecting the data (kind  of like zooming in)
+# a vector of length 5, containing the extreme of the lower whisker, the lower ‘hinge’, the median, the upper ‘hinge’ and the extreme of the upper whisker
+# by using the below limits we "zoom" in upto the whiskers
+saltLim <-  boxplot.stats(cleanData$salt)$stats[c(1,5)]
+alcoLim <-  boxplot.stats(cleanData$alcohol.energy)$stats[c(1,5)]
+alcoLim[1] = -3       # added this cushion as alcohol has a lot of 0 values
+bmiLim <-  boxplot.stats(cleanData$bmi)$stats[c(1,5)]
+waistLim <-  boxplot.stats(cleanData$waist)$stats[c(1,5)]
+ageLim <-  boxplot.stats(cleanData$age)$stats[c(1,5)]
+exerciseLim <-  boxplot.stats(cleanData$exercise)$stats[c(1,5)]
+viteLim <-  boxplot.stats(cleanData$vit.e)$stats[c(1,5)]
+satfatLim <-  boxplot.stats(cleanData$satfat)$stats[c(1,5)]
+vitb6Lim <-  boxplot.stats(cleanData$vit.b6)$stats[c(1,5)]
+
+### check why we sued guides below  ************
+gsalt <- ggplot(cleanData, aes(x = hypertension, y = salt, color=hypertension) ) + geom_boxplot(outlier.colour = "red") +
+  guides(fill=F)  + coord_cartesian(ylim=saltLim) + theme(axis.title.x=element_blank())
+galco <-   ggplot(cleanData, aes(x = hypertension, y = alcohol.energy, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=alcoLim) + theme(axis.title.x=element_blank())
+gbmi <- ggplot(cleanData, aes(x = hypertension, y = bmi, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=bmiLim) + theme(axis.title.x=element_blank())
+gwaist <- ggplot(cleanData, aes(x = hypertension, y = waist, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=waistLim) + theme(axis.title.x=element_blank())
+gage <- ggplot(cleanData, aes(x = hypertension, y = age, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=ageLim)  + theme(axis.title.x=element_blank())
+gexercise <- ggplot(cleanData, aes(x = hypertension, y = exercise, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=exerciseLim)  + theme(axis.title.x=element_blank())
+gvit.e <- ggplot(cleanData, aes(x = hypertension, y = vit.e, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=viteLim)  + theme(axis.title.x=element_blank())
+gvit.b6 <- ggplot(cleanData, aes(x = hypertension, y = vit.b6, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=vitb6Lim)  + theme(axis.title.x=element_blank())
+gsatfat <- ggplot(cleanData, aes(x = hypertension, y = satfat, color=hypertension)) + geom_boxplot(outlier.colour = "red") + coord_cartesian(ylim=satfatLim)  + theme(axis.title.x=element_blank())
+
+grid_arrange_shared_legend(gbmi, gage, gwaist, galco, gsalt,gexercise,gvit.e,gvit.b6, gsatfat, ncol=3, nrow =3)
+```
+
+The boxplots give information of how the distributions of the variables differ between the hypertensive and normotensive groups. The first row shows that those with hypertension have generally a larger BMI, are older and have a bigger waistline. It is not surprising that these variables are related in this way, it is interesting to note how different the age distributions are in median at almost 20 years. The second row shows that those with hypertension drink more and exercise less which is expected, but surprisingly hypertensive people appear to eat less salt. This is likely since those who are told they have hypertension are also told to reduce their salt intake, but one would expect this to also be true for alcohol as well if this were the case. The last rows have small differences as they are all nutritional factors, hypertensive people generally have less vitamin E and B6, surprisingly they also eat less saturated fat.
+It appears that some dietary factors have counterintuitive relations with hypertension and that there is possibly interference from treatment of the condition. This could mean that classification using these variables could be rendered useless as the trends they have are not reflecting how a risk factor should influence the incidence of the disease. To understand more about how some of these variables are related to hypertension, more analysis is needed. 
+
+
+## Salt intake and blood pressure
+
+Due to the counterintuitive result from the boxplots it is important to explore further the relationship between salt and hypertension. To do this the relationship between salt intake and the measured values for systolic and diastolic blood pressure is analysed. It would be inappropriate to include those people that have been diagnosed with hypertension in this analysis, as they likely have had treatment to reduce salt intake which would impact the goal of the analysis. Below is the scatterplots of diastolic and systolic blood pressure, those who with systolic blood pressure >140 mmHg or diastolic blood pressure >90 mmHg are coloured in blue to indicate those with a high blood pressure measurement.
+
+
+```{r "reading original data-salt"}
+saltPredictor <- c("SODIUMT1")
+ASresponse <- c("HYPBC","DIASTOL","SYSTOL")
+salt.dirty <- Dat.old[,c(ASresponse, saltPredictor)]
+#change names to easy
+names(salt.dirty) = c("hypertension", "diastolic","systolic","salt")
+salt.dirty$hypertension = salt.dirty$hypertension<2.5 
+#summary(salt.dirty)
+```
+
+```{r "remove rows - salt"}
+saltDat = salt.dirty
+saltDat = saltDat[-which(saltDat$diastolic == 0 | saltDat$diastolic >997),]
+saltDat = saltDat[-which(saltDat$salt > 15000),]
+#summary(saltDat)
+```
+
+
+```{r "salt regression"}
+tdat = saltDat[-which(saltDat$hypertension == T),]
+fdat <-  saltDat[which(saltDat$hypertension == F),]
+
+DiastolicBPt <- (tdat$diastolic >= 90)
+DiastolicBPf <- (fdat$diastolic >= 90)
+systolicBPt <- (tdat$systolic > 140)
+systolicBPf <-(fdat$systolic > 140)
+
+HYBP_T <-  (systolicBPt  | DiastolicBPt ) == TRUE
+HYBP_F <-  (systolicBPf  | DiastolicBPf)  == TRUE
+
+#  Diastolic blood pressure
+model.d = lm(saltDat[which(saltDat$hypertension ==F),]$diastolic~ saltDat[which(saltDat$hypertension == F),]$salt )
+#summary(model.d)
+
+# systolic BP
+model.s = lm(saltDat[which(saltDat$hypertension ==F),]$systolic~ saltDat[which(saltDat$hypertension == F),]$salt )
+#summary(model.s)
+```
+
+
+```{r "regression plots - salt"}
+dFalse <- ggplot(fdat, aes(x= salt, y=diastolic))  +
+  geom_point(aes(color=HYBP_F)) + 
+  geom_smooth(method="lm", se=TRUE) + 
+  ggtitle("Non-hypertensive people(diastolic)")
+
+# below plot looks at those that have hypertension (ie, TRUE) and does regression
+sFalse <- ggplot(fdat, aes(x= salt, y=systolic))  +
+  geom_point(aes(color=HYBP_F)) +
+  geom_smooth(method="lm", se=TRUE) +
+  ggtitle("Non-hypertensive people(systolic)")
+
+grid.arrange(dFalse, sFalse)
+```
+
+The p value for the slope is greater than 0.1 for both cases, indicating that there is no significant correlation between salt and blood pressure in people who have not been diagnosed with hypertension. This result simply indicates that there is no evidence to suggest that changing your salt intake will affect your blood pressure in any way. This suggests that maybe the only reason that salt was seen to have a significant relation with hypertension is the fact that those with the condition have cut down their salt intake intentionally as part of a way to treat the condition. However, this is purely a simple linear regression so we are not considering other confounding factors. 
+
+## Alcohol and hypertension/blood pressure
+
+It has been documented but not fully studied that light drinking can lead to lower blood pressure levels than abstaining from drinking all together. However, it is widely accepted that alcohol is positively correlated with blood pressure increase. The variable used here will be the percentage of energy from alcohol an individual consumes. To observe the how the incidence of hypertension changes with drinking patterns, a bar plot is constructed to show the proportion of hypertension in non-drinkers, lighter drinkers (bottom 50% of drinkers) and heavier drinkers (top 50%). P values were determined using a binomial test.
+
+
+```{r "Read cleaned data"}
+#### Read cleaned data
+alcoDat <- read.csv("./dat_clean2.csv")
+#dim(alcoDat)
+#str(alcoDat)
+```
+
+
+
+```{r "Bar plots"}
+#### bar plots
+attach(alcoDat,warn.conflicts = F)
+#summary(alcohol.energy[alcohol.energy != 0])
+#length(alcohol.energy[alcohol.energy >10])
+alc1 = alcohol.energy[alcohol.energy == 0]
+alc2 = alcohol.energy[alcohol.energy >0 & alcohol.energy <10]
+alc3 = alcohol.energy[alcohol.energy >= 10]
+# get ratio 
+rat1 = length(alc1[hypertension[alcohol.energy == 0]])/length(alc1)
+rat2 = length(alc2[hypertension[alcohol.energy >0 & alcohol.energy <10]])/length(alc2)
+rat3 = length(alc3[hypertension[alcohol.energy >= 10]])/length(alc3)
+ratios = round(c(rat1,rat2,rat3)*100, digits = 2)
+plot = barplot(ratios,ylab = "Incidence of hypertension (%)",names.arg = c("0%",">0% & <10% (p =0.26)",">10% (p <0.001)"),xlab = "Percent of total energy from alcohol",ylim = c(0,21), main = "Incidence of hyertension in drinking groups")
+text(x = plot, y =ratios+1, label = ratios)
+#binom.test(length(alc2[hypertension[alcohol.energy >0 & alcohol.energy <10]]),length(alc2),rat1)
+#binom.test(length(alc3[hypertension[alcohol.energy >= 10]]),length(alc3),rat1)
+```
+
+Just like the report referenced above, it is found that light drinkers have a lower incidence of hypertension that abstainers. However, like the report, the difference between light drinking and abstaining is not statistically significant with a p value of 0.26 and the heavy drinkers  had significantly more hypertension with a p value less than 0.001. The phenomenon in the light drinkers would need to be more thoroughly studied to prove a significant decrease in hypertension incidence, it may be caused by some physiological protective effect small intakes of alcohol has.
+
+
+To investigate the relationship alcohol has with hypertension plots were made to see how alcohol is correlated with systolic and diastolic blood pressure. The plots will be split up by data for hypertensive people and normotensive people. Again, those who with systolic blood pressure >140 mmHg or diastolic blood pressure >90 mmHg are coloured in blue to indicate those with a high blood pressure measurement.
+
+
+
+```{r "Alcohol original data"}
+
+alcoPredictors <- c("ALCPER1")
+
+ASresponse <- c("HYPBC","DIASTOL","SYSTOL")
+alcoDat.dirty <- Dat.old[,c(ASresponse, alcoPredictors)]
+
+
+#change names to easy
+names(alcoDat.dirty) = c("hypertension", "diastolic","systolic","alcohol.energy")
+alcoDat.dirty$hypertension = alcoDat.dirty$hypertension<2.5 
+#summary(alcoDat.dirty)
+```
+
+ 
+```{r "removing rows" }
+dat.alco = alcoDat.dirty
+dat.alco = dat.alco[-which(dat.alco$diastolic == 0 | dat.alco$diastolic >997),]
+
+#summary(dat.alco)
+```
+
+```{r "Diastolic blood pressure  regression"}
+
+model.t = lm(dat.alco[which(dat.alco$hypertension ==T),]$diastolic~ dat.alco[which(dat.alco$hypertension == T),]$alcohol.energy )
+#summary(model.t)
+
+model.f = lm(dat.alco[which(dat.alco$hypertension ==F),]$diastolic~ dat.alco[which(dat.alco$hypertension == F),]$alcohol.energy )
+#summary(model.f)
+```
+
+
+```{r "logical values"}
+tdat = dat.alco[which(dat.alco$hypertension == T),]
+fdat <-  dat.alco[which(dat.alco$hypertension == F),]
+
+DiastolicBPt <- (tdat$diastolic >= 90)
+DiastolicBPf <- (fdat$diastolic >= 90)
+systolicBPt <- (tdat$systolic > 140)
+systolicBPf <-(fdat$systolic > 140)
+
+HYBP_T <-  (systolicBPt  | DiastolicBPt ) == TRUE
+HYBP_F <-  (systolicBPf  | DiastolicBPf)  == TRUE
+
+```
+
+
+```{r "Diastolic regression plot"}
+
+dTrue <- ggplot(tdat, aes(x= alcohol.energy, y=diastolic))  +
+  geom_point(aes(color=HYBP_T)) + 
+  geom_smooth(method="lm", se=TRUE) + 
+  ggtitle("Hypertensive people(diastolic)")
+
+dFalse <- ggplot(fdat, aes(x= alcohol.energy, y=diastolic))  + 
+  geom_point(aes(color=HYBP_F)) + 
+  geom_smooth(method="lm", se=TRUE) +
+  ggtitle("Non-Hypertensive people(diastolic)")
+```
+
+
+```{r "Systolic regression"}
+model.t = lm(dat.alco[-which(dat.alco$hypertension ==T),]$systolic~ dat.alco[-which(dat.alco$hypertension == T),]$alcohol.energy )
+#summary(model.t)
+
+model.f = lm(dat.alco[-which(dat.alco$hypertension ==F),]$systolic~ dat.alco[-which(dat.alco$hypertension == F),]$alcohol.energy )
+#summary(model.f)
+```
+
+```{r "systolic plots"}
+# below plot look at those that have hypertension (ie, TRUE) and does regression
+sTrue <- ggplot(tdat, aes(x= alcohol.energy, y=systolic))  +
+  geom_point(aes(color=HYBP_T)) +
+  geom_smooth(method="lm", se=TRUE) +
+  ggtitle("Hypertensive people(systolic)")
+
+# below plot look at those that dont have hypertension (ie, False) and does regression on those against sysloic  - regression line is almost flat!
+sFalse <- ggplot(fdat, aes(x= alcohol.energy, y=systolic))  +
+  geom_point(aes(color=HYBP_F)) + 
+  geom_smooth(method="lm", se=TRUE) +
+  ggtitle("Non-Hypertensive people(systolic)")
+```
+
+```{r "regression plots in grid"}
+#grid_arrange_shared_legend(dTrue, sTrue, dFalse, sFalse)
+grid.arrange(dTrue, sTrue, dFalse, sFalse)
+```
+
+
+All but the top right has significant (at 0.05 level) positive slopes indicating a clear rise in blood pressure with increasing alcohol. The gradients in both non-hypertensive plots are much larger than in the hypertensive plots. Diastolic blood pressure rises 0.2mmHg every percent more of your energy intake being alcohol and systolic blood pressure rising 0.35mmHg every percent, in non-hypertensive people. In both hypertensive models, the gradient is 0.1mmHg/percent energy intake from alcohol, with the systolic having an insignificant slope. 
+
+The reason the plots have been divided by hypertension groups is that it was assumed there would be a difference in the hypertensive people as they are likely undergoing treatment and altering their alcohol intake due to the presence of the condition. This assumption appears warranted that the plots offer different relationships with alcohol.  Another interesting observation to note in bottom left plot is there seems to be people in the hypertensive group with high systolic BP (blood pressure) and quite low diastolic BP. Possibly certain hypertensive conditions have this kind of behaviour or it is a treatment which is causing this.
+
+
+
+
+
+
+## Classification Analysis
+
+After the cleaning of original data, we were left with 7512 samples and they were split up (randomly) as follows:
+
+  - Training set (60 %)	- 4507
+
+  - Testing set (20 %) -	1502
+
+  - Cross-Validation (CV) set (20 %)	- 1503
+
+The below three classifiers were used on the cleaned data:
+
+	- KNN: K-Nearest Neighbour
+	
+	- Logistic Regression
+	
+	- SVM:  Support Vector Machine (Linear and radial kernel)  
+	
+#### Reasons for choosing the above three classifiers:
+
+None of the three models make any strict assumptions about the decision boundaries for the data.  In this instance we only looked at linear and radial kernels for SVM but (time permitting) we could have looked at polynomial kernels as well. 
+The only assumption logistic regression makes is that the logit is a linear function of the predictors.  
+
+#### Procedure:
+  The whole report was run with set.seed(1)
+
+
+##### KNN 
+
++ Data was scaled using scale()
++ 10 fold Cross-validation was used to pick the parameter “k”, this was run 30 times and training data was used in this step. We did not think it would be appropriate to pick a parameter based on CV-set (as it was only 20% of the data).
++ We used k = 20 based on the value of k that gave the minimum CV error in step 1.
++ Using this value of k, we tested the KNN classifier on the testing data set. 
++ knn() package from the MASS library was used to perform classification.
+
+
+##### Logistic Regression
+
++ Full model (using all predictors) was fit using the training data set. 
++  glm() function was used from the base R.
++ Then model selection was done using the step() function using both AIC and BIC criterion. This was done starting with both “full” and “null” model. 
++ AIC and BIC picked different models irrespective of starting with a full or null model. Both had “alcohol.energy”, “bmi”, “age” but AIC also picked “waist” (bmi and waist are highly correlated but bmi had a bigger coefficient).
++ Test set was used on both models to check their performance and the BIC model performed better (21.7 % vs 22.02 %) But when using 10-fold CV, both models performed similarly (around 23 % error rate)
++ Also, an arbitrary cut-off of 0.5 was chosen to assign the class labels to the prediction with >0.5 being marked as having hypertension. (ROC curve of this model suggests it is still  a good model with another arbitrary cut-off)
++ We picked the BIC model as it was simpler. 
+
+##### SVM
+		
+Linear kernel:
+
++ tune() function from library e1071 was used for finding ( the best model with appropriate cost parameter within the CV loop).
++ Data is scaled internally by the tune() and svm() functions.
++ For the cost parameter we tried the values (0.001, 0.01, 0.1, 1, 5, 10, 100). Again the training set was used instead of the CV set.
++ 0.1 was picked by the tune function as the best parameter and also output the best model  by fitting this cost parameter, which resulted in 2404  support vectors.
++ We used the remaining data to test the performance of this model.
+            Using just the test set (~1500 samples)  gave an error rate of 21.69%
+            Using all the remaining samples (~3000)  gave an error rate of 22.77%
+
+Radial kernel:
+
++ Used the exact same process as above but this time there were two parameters to pick, “c”, “gamma”
++ We used  cost=c(0.1, 1, 10, 100, 1000), gamma=c(0.5,1,2,3,4) as inputs to the tune() function and it output c = 1 and gamma = 0.5 as the best parameters.
++ The best radial model had 3425 support vectors.
++ We tested this model with the CV+test sample combined and it gave far worse error rate.
+            Using all the remaining samples (~3000)  gave an error rate of 24.82%
+
+
+
+
+## SVM
+
+```{r "tuning for C - SVM linear", echo=FALSE}
+###### Tuning for C   - tried the values  0.001, 0.01, 0.1, 1, 5, 10, 100    - takes too long to run!
+tune.out=tune(svm, Ytrain~., data=dat, kernel ="linear", 
+              ranges = list(cost=c(0.01, 0.1, 1, 5) ))    # using only traing set
+```
+
+The best model from CV-tuning for the SVM linear kernel:
+```{r "best model for SVM linear", echo=FALSE}
+#summary(tune.out)
+bestOne <-  tune.out$best.model
+summary(bestOne)
+```
+
+```{r "predicting - SVM linear kernel", echo=FALSE}
+###### using CV+test samples	
+
+predObjectLin <- predict(bestOne, datTestSVM, decision.values = TRUE)      ## from the help file  
+
+SVM3000L <- table(predict=predObjectLin, truth=datTestSVM$YtestSVM)    # gives the confusion matrix
+
+##### using only test samples
+
+predObjectLinLR <- predict(bestOne, datTestLR, decision.values = TRUE)      ## from the help file  
+SVM1500L <- table(predict=predObjectLinLR, truth=datTestLR$YtestLR)    # gives the confusion matrix
+```
+
+
+
+```{r "performance - SVM linear", echo=FALSE}
+SVMperf = c()
+SVMperf[1] = mean(predObjectLin == YtestSVM)       # success rate
+SVMperf[2] = mean(predObjectLin != YtestSVM)       # error rate
+
+SVMperf1 = c()
+SVMperf1[1] = mean(predObjectLinLR == YtestLR)       # success rate
+SVMperf1[2] = mean(predObjectLinLR != YtestLR)       # error rate
+
+```
+
+```{r "SVM linear - prediction and data for ROC", echo=FALSE}
+predFittedLin <-  attributes(predObjectLin)$decision.values
+#class(predFittedLin)     # this is a matrix!!!  
+
+predFittedLinNums <- as.numeric(predFittedLin)           ## this is what we want for ROC curve
+```
+
+
+```{r "SVM radial Tuning for C and gamma", echo=FALSE}
+##  two parameter model
+#we tried  (cost=c(0.1, 1, 10, 100, 1000), gamma=c(0.5,1,2,3,4) )  but takes too long to run so only left some for final report
+tune.outRad = tune(svm, Ytrain~., data=dat, kernel ="radial",  
+                   ranges = list(cost=c(0.1, 1, 10), gamma=c(0.5, 1) ))    # WARNING: this will hammer the CPU
+```
+
+
+```{r, "SVM radial best model", echo=FALSE}
+#summary(tune.outRad)
+bestOneRad <-  tune.outRad$best.model
+#summary(bestOneRad)
+```
+					   
+```{r "SVM -Radial prediction", echo=FALSE}
+YpredictRad <-  predict(bestOneRad, datTestSVM, decision.values = TRUE)
+
+# gives the confusion matrix  for radial SVM
+cmatRad3000 <- table(predict=YpredictRad, truth=datTestSVM$YtestSVM)    
+```
+
+```{r "SVM radial performance", echo=FALSE}
+SVMperfRad = c()
+SVMperfRad[1] = mean(YpredictRad == YtestSVM)       # success rate
+SVMperfRad[2] = mean(YpredictRad != YtestSVM)       # error rate
+```
+Confusion matrices - SVM:
+
+Linear-CV+Test, Linear-test, Radial-CV+Test
+
+```{r "SVM confusion matrices", echo=FALSE}
+cmatSVM <- cbind(SVM1500L, SVM3000L, cmatRad3000)
+cmatSVM
+```
+
+
+Performance of SVM models (%):
+
+```{r "SVM performance", echo=FALSE}
+perfSVM <- cbind(SVMperf, SVMperf1, SVMperfRad)
+colnames(perfSVM) <-  c("Linear-CV+Test", "Linear-test", "Radial-CV+Test")
+rownames(perfSVM) <- c("Success", "Error")
+perfSVM
+```
+
+Linear kernel model outperforms the radial model by a significant margin.
+
+```{r "SVM radial ROC data and prediction", echo=FALSE}
+predFittedRad <-  attributes(YpredictRad)$decision.values
+predFittedRadNums <- as.numeric(predFittedRad) 
+```
+
+## Logistic Regression
+
+```{r "FULL MODEL (USING ONLY 4507 SAMPLES)", echo=FALSE}
+lr.model <- glm(Y~., data=X, family=binomial, subset=train)
+
+```
+
+
+```{r "model selection - AIC/BIC", message=FALSE, echo=FALSE}
+null = glm(Y~1,data=X,family=binomial, subset=train)
+full = lr.model
+n = length(Y)
+# stepwise from full model using BIC
+res.step.bic.full <- step(full,k=log(n), trace = 0)
+# stepwise from full model using AIC
+res.step.aic.full <- step(full,k=2, trace = 0)
+#  did AIC/BIC from NULL as well but no better than above
+```
+
+
+#####  Summary of results for Logistic regression
+
+```{r "summarizing log-reg", echo=FALSE}
+
+ht = huxreg("Full" = full, "Full-BIC" = res.step.bic.full,  "Full-AIC" = res.step.aic.full,
+            statistics = c(N = "nobs", "logLik", "AIC", "BIC", "null.deviance", Deviance = "deviance"), error_format = "", error_pos = "same", borders = TRUE, bold_signif = 0.05)
+right_padding(ht) <- 5
+left_padding(ht)  <- 5
+#bold(ht)[2,]    <- TRUE      # there is an issue after installing flextable!!!!
+bottom_border(ht)[1,] <- 1
+right_border(ht) <-  1
+ht <- set_background_color(ht,1,c(2,4), "coral")
+ht <- set_background_color(ht,,3, "forestgreen")
+ht
+```
+
+
+Picking the FULL-BIC model based on prediction performance:
+
+$\bf{ln(\frac{p(X)}{1 - p(X)}) = -6.796 + 0.016 \ alcohol.energy + 0.084 \ bmi + 0.065 \ age}$
+
+  Where:    $p(X): probability \ of \ developing\ hypertension$
+  
+  And it is given by:   $p(X) = \frac{1}{1 + e^{-(-6.796 + 0.016 \ alcohol.energy + 0.084\  bmi + 0.065 \ age)}}$
+
+```{r "LR performance", echo=FALSE}
+lr.predictAIC.train <- predict(res.step.aic.full, X[train,], type= "response")
+lr.predAIC.train = rep("no", length(Y[train]))
+lr.predAIC.train[lr.predictAIC.train > 0.5] = "yes"
+LRFullTr <- table(lr.predAIC.train, Y[train]) 
+
+LRperf.train = c()
+LRperf.train[1] = mean(lr.predAIC.train == Y[train])       # success rate
+LRperf.train[2] = mean(lr.predAIC.train != Y[train])       # error rate
+
+
+lr.predict <- predict(lr.model, X[testLR,], type= "response")
+lr.pred = rep("no", length(Y[testLR]))
+lr.pred[lr.predict > 0.5] = "yes"
+LRfullTes <- table(lr.pred, Y[testLR]) 
+
+LRperf = c()
+LRperf[1] = mean(lr.pred == Y[testLR])       # success rate
+LRperf[2] = mean(lr.pred != Y[testLR])       # error rate
+
+
+lr.predictAIC <- predict(res.step.aic.full, X[testLR,], type= "response")
+lr.predAIC = rep("no", length(Y[testLR]))
+lr.predAIC[lr.predictAIC > 0.5] = "yes"
+AICmat <- table(lr.predAIC, Y[testLR]) 
+	 
+
+LRperfAIC = c()
+LRperfAIC[1] = mean(lr.predAIC == Y[testLR])       # success rate
+LRperfAIC[2] = mean(lr.predAIC != Y[testLR])       # error rate
+
+lr.predictBIC <- predict(res.step.bic.full, X[testLR,], type= "response")
+lr.predBIC = rep("no", length(Y[testLR]))
+lr.predBIC[lr.predictBIC > 0.5] = "yes"
+BICmat <- table(lr.predBIC, Y[testLR]) 
+										 
+
+LRperfBIC = c()
+LRperfBIC[1] = mean(lr.predBIC == Y[testLR])       # success rate
+LRperfBIC[2] = mean(lr.predBIC != Y[testLR])       # error rate
+
+```
+
+Cross Validation error for the BIC model: 
+
+```{r "LR CV", echo=FALSE}
+V = 10
+Yn = as.numeric(Y)-1       #  for some reason this needs to be 0-1  binary variable.
+
+Xcv <- subset(X, select=c(bmi, alcohol.energy, age))     # only keeping variables that are significant - ie, from FULL-BIC model   
+#Xcv <- subset(X, select=c(bmi, waist, alcohol.energy, age))          # use this to test FULL-AIC model
+res.glm.cv = cv.glm(Xcv[CV,],Yn[CV],V,seed=1)
+res.glm.cv
+
+```
+
+This is higher than test-set data!
+
+```{r "performance LR - cv", echo=FALSE}
+LRperfCV = c()
+LRperfCV[1] = 1 - res.glm.cv
+LRperfCV[2] = res.glm.cv
+
+```
+
+Model performance:
+
+Full, AIC, BIC  confusion matrices
+```{r "LR cmat comparision", echo=FALSE}
+cmatLR <- cbind(LRfullTes, AICmat, BICmat)
+cmatLR
+```
+
+Performance of Logistic regression models (%):
+
+```{r "LR performance comaparision", echo=FALSE}
+perfLR <- cbind(LRperf.train, LRperf, LRperfAIC, LRperfBIC, LRperfCV)
+colnames(perfLR) <- c("Training-Full","Test-Full", "Test-AIC", "Test-BIC", "CV-BIC")
+rownames(perfLR) <- c("Success", "Error")
+perfLR*100
+```
+
+Both AIC And BOC model are pretty close but their CV-error is markedly higher.
+It is more informative to look at their performance using the ROC curves.
+
+## KNN
+
+```{r "CV KNN to pick k", echo=FALSE}
+k.values = seq(1,49,by=2)
+V = 10
+R = 15
+# Loop through all values of k and calculate the cross-validation error
+# ie,  CV error for each k, and we pick the k with lowest test cv error
+cv.errorsKNN = c()
+cv.kMin = c()
+cvMin = c()
+kMin = c()
+cv.errors1 = c()
+for (r in 1:R ) {
+    for (i in 1:length(k.values)) {
+      cv.errorsKNN[i] = cv.knn(X.scaled[train,],Y[train],k=k.values[i],V)       
+              #   we are building up a vector of cv-errors for each K
+    }
+    if (r ==1) {
+      cv.errors1 = cv.errorsKNN
+      plot(k.values,cv.errorsKNN,type="l",xlab="value of k",ylab="cross-validation error",cex.lab=1.5,
+        main="CV errors for K-nearest neighbours",cex.main=2,col="red", ylim=c(0.2,0.38), lwd=4)
+    } else     lines(k.values,cv.errorsKNN)
+    
+    kMin[r] <- k.values[which.min(cv.errorsKNN)]
+    cvMin[r] <- min(cv.errorsKNN)
+    
+}
+lines(k.values,cv.errors1, col="red")
+```
+
+
+
+```{r "MinCV plot KNN", echo=FALSE}
+plot(kMin, cvMin, col=ifelse(cvMin==min(cvMin), "cyan", "brown"), pch=ifelse(cvMin==min(cvMin), 19, 22), 
+     cex=ifelse(cvMin==min(cvMin), 2, 1), main="Highlighted point/s is the minimum CV-error")
+cstar = min(cvMin)
+kstar = kMin[which(cvMin == min(cvMin))]
+text(kstar, cstar, paste(kstar,round(cstar,4), sep=", "), pos=4, cex=0.7)
+```
+
+
+```{r  "KNN performance", echo=FALSE}
+K = 20    # picked based on CV-analysis,  the curves flatten out after 20
+knn.predict <- knn(X.scaled[train,], X.scaled[testLR,], Y[train], k=K)
+cmatKNN1 <- table(knn.predict, Y[testLR])
+
+KNNperf = c()
+KNNperf[1] = mean(Y[testLR] == knn.predict)          # success rate
+KNNperf[2] = mean(Y[testLR] != knn.predict)            #error rate
+
+
+K = 20    
+knn.predict <- knn(X.scaled[train,], X.scaled[testMore,], Y[train], k=K)
+cmatKNN2 <- table(knn.predict, Y[testMore])
+
+KNNperf1 = c()
+KNNperf1[1] = mean(Y[testMore] == knn.predict)          # success rate
+KNNperf1[2] = mean(Y[testMore] != knn.predict)            #error rate
+
+```
+Performance of KNN classifier:
+
+KNN-Test, KNN-CV+Test-set  confusion matrices:
+```{r "KNN cmat comparision", echo=FALSE}
+cmatKNN <- cbind(cmatKNN1, cmatKNN2)
+cmatKNN
+```
+
+Performance of KNN classifier (%)
+
+```{r "KNN performance comaparision", echo=FALSE}
+perfKNN <- cbind(KNNperf, KNNperf1)
+colnames(perfKNN) <- c("Test-set","CV+Test-set")
+rownames(perfKNN) <- c("Success", "Error")
+perfKNN*100
+```
+
+KNN model performs quite poorly compared to the other two classifiers.  
+Using the test-set it pares well but the above plot of CV errors shows that it does not dip below 24 % when cross validation is used.
+
+
+## ROC and confusion matrices
+
+The below illustration is taken from “An introduction to ROC analysis” by Tom Fawcett.
+```{r, out.width = "400px"}
+knitr::include_graphics("cmat.png")
+```
+
+Most of the performance measurements used in out analysis can be calculated from the confusion matrix as show in the above illustration.
+
+The two main metrics we used are:
+
+$Success \ rate =  \frac{True \ Positives  + True \ Negatives}{Total \ samples}$
+
+$Error \ rate =  \frac{False \ Positives  + False \ Negatives}{Total \ samples}$
+
+I.e., to get the success rate add the diagonal entries and divide by the total sample size and for error rate add the other diagonal entries and divide by the total sample size.
+
+
+
+
+##### How to read the ROC plot:
+
+Y axis shows the “True positive (TP) rate”  and X axis shows the “False positive (FP) rate”.
+Best performing models are the ones with the curve towards the northwest.
+
+The below ROC curves calculate the FP and TP rate from several confusion matrices that use different cut-offs to classify the scores.
+For example, we used 0.5 as the cut-off for Logistic regression classification once we got the prediction scores. We could have easily picked some other cutoff. 
+Relying solely on a single confusion matrix analysis will be misleading instead  ROC curves paint a picture of how the model performs over a range of cutoffs.
+ 
+
+
+```{r "ROC plots", echo=FALSE}
+rocplot(predFittedLinNums, datTestSVM$YtestSVM, main="ROC curves", col="green", lty=4, lwd=1.25)
+rocplot(predFittedRadNums, datTestSVM$YtestSVM, col="red", add=TRUE, lty=5)
+rocplot(as.numeric(as.factor(lr.predictBIC)),  as.numeric(as.factor(Y[testLR])), 
+        col="blue", add=TRUE, lty = 1, lwd=1.5)
+rocplot(as.numeric(as.factor(lr.predictAIC)),  as.numeric(as.factor(Y[testLR])), 
+        col="orange", add=TRUE, lty = 1, lwd=1.5)
+rocplot(as.numeric(as.factor(lr.predictAIC.train)), as.numeric(as.factor(Y[train])), 
+        col="brown", add=TRUE, lty=6)
+
+
+legend("bottomright",
+       legend=c("SVM-Linear Kernel", "SVM-Radial Kernel","Logistic Regression(BIC-model)", 
+                "Logistic Regression(AIC-model)", "Logistic Regression(AIC-model, training data)"), 
+       col= c("green", "red","blue", "orange", "brown"), lty = c(4, 5,1, 1, 6), inset = .02)
+```
+
+
+## Conclusion
+
+This paper has been successful in examining the known factors for hypertension for the Australian population. It was shown that of 13 known variables only 9 had significantly different distribution between hypertensive and normotensive people at the 0.05 level. The variables that were determined not to be significant may be, they may confound with other factors that create the onset of hypertension.When the relation of salt to blood pressure was further analysised it was found that there was no linear correlation between either blood pressure measure and salt in people not diagnosed with hypertension. This could be that people with well known characteristics that indicate hypertension, and more likely to have it, have changed their salt intake as a precaution and hence the lack of relation. 
+
+It was gathered from other sources that alcohol intake might not have a simple relation to alcohol, with some data suggesting that small amounts may infact lower blood pressure. Similar analysis was conducted and it was found that there was a decrease in blood pressure in the lower half of drinkers, but it was not significant enough to say for sure. It was also confirmed that large alcohol intakes contribute significantly to higher blood pressure.
+
+The above ROC plot shows that Logistic Regression model and SVM (linear kernel) model outperform the other models in classifying. They both have error rates between 22 - 24 % but looking at the above plot closely, it is clear that Logistic regression outperforms SVM (linear kernel) model at certain cutoffs but towards the northwest they all are packed closer except for the SVM (radial kernel) model. In conclusion we could use either model to classify with a success rate of atleast 76%.
+
+## References
+
+1.	_Appel LJ, Dietary approaches to prevent and treat hypertension: A scientific statement from the American Heart Association. Hypertension 2006; 47(2): 296–308._
+2.	_Dakshinamurti K, Dakshinamurti S: Blood pressure regulation and micronutrients.Nutr Res Rev. 2001 Jun;14(1):3-44. doi: 10.1079/NRR200116._
+3.	_Fujita T. Mechanism of Salt-Sensitive Hypertension: Focus on Adrenal and Sympathetic Nervous Systems. Journal of the American Society of Nephrology: JASN. 2014;25(6):1148-1155. doi:10.1681/ASN.2013121258._
+4.	_Whelton, Paul & He, Jiang & Appel, Lawrence & A Cutler, Jeffrey & Havas, Stephen & A Kotchen, Theodore & Roccella, Edward & Stout, Ron & Vallbona, Carlos & C Winston, Mary & Karimbakas, Joanne. (2002). Primary prevention of hypertension: clinical and public health advisory from The National High Blood Pressure Education Program. JAMA : the journal of the American Medical Association. 288. 1882-8. 10.1001/jama.288.15.1882._
+5.	_Franz H Messerli, Bryan Williams, Eberhard Ritz, Essential hypertension, In The Lancet, Volume 370, Issue 9587, 2007, Pages 591-603, ISSN 0140-6736, https://doi.org/10.1016/S0140-6736(07)61299-9.(http://www.sciencedirect.com/science/article/pii/S0140673607612999) _
+6.	_Gleiberman L, Harburg E: Alcohol usage and blood pressure: A review. Hum Biol 1986; 58:1-31._
+7.	_Russell M, Cooper ML, Frone MR, Welte JW. Alcohol drinking patterns and blood pressure. American Journal of Public Health. 1991;81(4):452-457._
+8.	_Shankarishan P, Borah PK, Mohapatra PK, Ahmed G, Mahanta J. Population attributable risk estimates for risk factors associated with hypertension in an Indian population. Eur J Prev Cardiol. 2012;20:963–71._
+9.	_Kaldmäe M, Viigimaa M, Zemtsovskaja G, Kaart T, Abina J, Annuk M. Prevalence and determinants of hypertension in Estonian adults. Scand J Public Health. 2014;42(6):504–510._
+10.	_Gareth James, Daniela Witten, Trevor Hastie and Robert Tibshirani    “An Introduction to Statistical Learning”      http://www-bcf.usc.edu/~gareth/ISL/ _
+11.	_TomFawcett,  “An introduction to ROC analysis”,  Pattern Recognition Letters  Volume 27, Issue 8, June 2006, Pages 861-874_
+
+
+
+
+
+
