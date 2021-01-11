@@ -1,8 +1,9 @@
 ## Demo/Ref code
 
 - az_func - Azure Function demo: Phone number validation API
+- aws_lambda  - AWS Lambda demo: Phone number validation API
 - gnaf - Geocoded National Address File
-    - Reference code to build the GNAF database in PostgreSQL
+    - Reference code to build the GNAF database in PostgreSQL (VM)
 
 ## Academic Projects
 
