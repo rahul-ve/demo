@@ -1,5 +1,7 @@
 ## GNAF Database
 
+
+**For Docker build, please refer to [this repo](https://github.com/rahul-ve/gnaf_container).**
 ####  Prerequisites
 - GNAF data files from [data.gov.au](https://data.gov.au/dataset/ds-dga-19432f89-dc3a-4ef3-b943-5326ef1dbecc/details?q=gnaf)
     - Extract the zip file to a location that is accessible from the PostgreSQL instance. (e.g. /mnt/  OR bind mount into the docker container)
