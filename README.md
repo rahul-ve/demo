@@ -4,6 +4,7 @@
 - aws_lambda  - AWS Lambda demo: Phone number validation API
 - gnaf - Geocoded National Address File
     - Reference code to build the GNAF database in PostgreSQL (VM)
+    - Reference code to build the GNAF database in a PostGIS Docker container, please refer to **[this repo](https://github.com/rahul-ve/gnaf_container).**
 
 ## Academic Projects
 
