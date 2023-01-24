@@ -5,6 +5,7 @@
 - gnaf - Geocoded National Address File
     - Reference code to build the GNAF database in PostgreSQL (VM)
     - Reference code to build the GNAF database in a PostGIS Docker container, please refer to **[this repo](https://github.com/rahul-ve/gnaf_container).**
+- secure_secrets   -  Demo of how to use `pass` to secure creds with Docker Compose files
 
 ## Academic Projects
 
