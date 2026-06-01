@@ -1,0 +1,28 @@
+# Override the Spark image via env var or .env file:
+#   SPARK_IMAGE=apache/spark:3.5.5-python3 docker compose run --rm spark-demo
+#   ./run.sh 3.5.5
+services:
+  spark-demo:
+    image: ${SPARK_IMAGE:-apache/spark:4.1.2-python3}
+    user: root
+    volumes:
+      # Mount spark_config/ as the Spark working directory inside the container.
+      # The script writes sample data to ./data/sample.csv at runtime.
+      - .:/opt/spark/work-dir
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - local[*]
+      - /opt/spark/work-dir/failfast_demo.py
+
+  # Long-running container for interactive testing.
+  # Start: docker compose up -d spark-shell
+  # Shell: docker compose exec spark-shell bash
+  # PySpark REPL: /opt/spark/bin/pyspark --master local[*]
+  # Submit: /opt/spark/bin/spark-submit --master local[*] /opt/spark/work-dir/failfast_demo.py
+  spark-shell:
+    image: ${SPARK_IMAGE:-apache/spark:4.1.2-python3}
+    user: root
+    volumes:
+      - .:/opt/spark/work-dir
+    command: sleep infinity
